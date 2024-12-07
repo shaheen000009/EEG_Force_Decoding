@@ -1,0 +1,216 @@
+import pygame
+from psychopy import core
+import numpy as np
+import serial
+import pandas as pd
+import time
+import random
+from datetime import datetime
+
+# Global variables
+max_force = 7500  # Maximum force for bar plot
+duration = 0.005  # Marker pulse duration in seconds
+current_marker = 0  # Persistent marker for data logging
+
+# Pygame initialization
+pygame.init()
+screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+screen_width, screen_height = screen.get_width(), screen.get_height()
+
+# Colors and font
+GREY = (128, 128, 128)
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+font = pygame.font.SysFont(None, 50)
+
+# Serial communication
+ser = serial.Serial('COM5', 9600)
+
+# Initialize data storage
+force_data = pd.DataFrame(columns=["Time", "Force", "Marker"])
+
+# Experiment parameters
+instructions = ["10%", "25%", "50%", "75%"]
+instruction_markers = {"10%": 1, "25%": 2, "50%": 3, "75%": 4}
+ready_message = "Ready"
+relax_message = "Relax"
+instruction_duration = 6  # seconds
+relax_duration = 4  # seconds
+ready_duration = 2  # seconds
+num_trials = 2
+
+# Experiment states
+STATE_INITIAL_INSTRUCTIONS = 0
+STATE_READY_SCREEN = 1
+STATE_INSTRUCTION_SCREEN = 2
+STATE_RELAX_SCREEN = 3
+STATE_TRIAL_END = 4
+STATE_COMPLETED = 5
+
+# State management variables
+running = True
+state = STATE_INITIAL_INSTRUCTIONS
+current_trial = 1
+current_instruction_index = 0
+start_time = None
+file_saved = False
+
+# Track experiment start time
+experiment_start_time = time.time()
+
+# Set up instruction and bar plot areas
+instruction_area = pygame.Surface((screen_width // 2, screen_height))
+bar_plot_area = pygame.Surface((screen_width // 2, screen_height))
+
+# Bar plot setup
+plot_position = (50, 100)  # Position on the bar plot area
+plot_size = (100, screen_height - 200)  # Size of the plot
+static_bar_surface = pygame.Surface((plot_size[0] + 80, plot_size[1]))  # Extra space for labels
+static_bar_surface.fill(GREY)
+
+# Draw percentage lines and labels (static part of the plot)
+width, height_max = plot_size
+for percentage in [0.1, 0.25, 0.5, 0.75, 1.0]:
+    line_y = height_max - int(percentage * height_max)
+    pygame.draw.line(static_bar_surface, BLACK, (0, line_y), (width, line_y), 2)
+    percentage_text = font.render(f'{int(percentage * 100)}%', True, BLACK)
+    text_x = static_bar_surface.get_width() - 75  # Adjust label placement
+    text_y = line_y - font.get_height() // 2
+    static_bar_surface.blit(percentage_text, (text_x, text_y))
+
+
+def read_force_and_update_plot():
+    """Read force data from the serial port and update the bar plot."""
+    if ser.in_waiting > 0:
+        try:
+            line = ser.readline().decode('utf-8').strip()
+            current_force = int(line)
+
+            # Clamp force value within valid range
+            current_force = max(0, min(max_force, current_force))
+
+            # Record data
+            elapsed_time = time.time() - experiment_start_time
+            marker_label = f"s{current_marker}" if current_marker > 0 else " "
+            force_data.loc[len(force_data)] = [elapsed_time, current_force, marker_label]
+
+            # Update bar plot
+            normalized_height = int((current_force / max_force) * static_bar_surface.get_height())
+            x, y = plot_position
+            bar_plot_area.fill(GREY)
+            bar_plot_area.blit(static_bar_surface, (x, y))
+            pygame.draw.rect(
+                bar_plot_area, WHITE,
+                (x, y + static_bar_surface.get_height() - normalized_height, static_bar_surface.get_width() - 80, normalized_height)
+            )
+        except ValueError:
+            print(f"Invalid data received: {line}")
+
+
+def draw_text_centered(text, font, color, surface, offset_x=0, offset_y=0):
+    """Draw text centered."""
+    textobj = font.render(text, True, color)
+    textrect = textobj.get_rect(center=(surface.get_width() // 2 + offset_x, surface.get_height() // 2 + offset_y))
+    surface.blit(textobj, textrect)
+
+
+def reset_state(new_state):
+    """Reset state and start time."""
+    global start_time, state
+    start_time = time.time()
+    state = new_state
+
+
+while running:
+    # Clear the main screen
+    screen.fill(GREY)
+
+    # Update and draw the bar plot
+    read_force_and_update_plot()
+    screen.blit(bar_plot_area, (screen_width // 2, 0))
+
+    if state == STATE_INITIAL_INSTRUCTIONS:
+        instruction_area.fill(GREY)
+        draw_text_centered("Welcome to the Experiment", font, BLACK, instruction_area)
+        draw_text_centered("Press SPACEBAR to start", font, BLACK, instruction_area, offset_y=50)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                random.shuffle(instructions)
+                reset_state(STATE_READY_SCREEN)
+
+    elif state == STATE_READY_SCREEN:
+        instruction_area.fill(GREY)
+        draw_text_centered(ready_message, font, BLACK, instruction_area)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        if time.time() - start_time > ready_duration:
+            reset_state(STATE_INSTRUCTION_SCREEN)
+
+    elif state == STATE_INSTRUCTION_SCREEN:
+        current_instruction = instructions[current_instruction_index]
+        current_marker = instruction_markers[current_instruction]  # Update the marker
+        instruction_area.fill(GREY)
+        draw_text_centered(f"{current_instruction}", font, BLACK, instruction_area)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        if time.time() - start_time > instruction_duration:
+            reset_state(STATE_RELAX_SCREEN)
+
+    elif state == STATE_RELAX_SCREEN:
+        instruction_area.fill(GREY)
+        draw_text_centered(relax_message, font, BLACK, instruction_area)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        if time.time() - start_time > relax_duration:
+            current_instruction_index += 1
+            if current_instruction_index >= len(instructions):  # End of instructions
+                current_instruction_index = 0  # Reset index
+                reset_state(STATE_TRIAL_END)
+            else:
+                reset_state(STATE_READY_SCREEN)
+
+    elif state == STATE_TRIAL_END:
+        instruction_area.fill(GREY)
+        draw_text_centered("End of this Trial", font, BLACK, instruction_area)
+        draw_text_centered("Press SPACEBAR for next trial", font, BLACK, instruction_area, offset_y=50)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                current_trial += 1
+                if current_trial > num_trials:
+                    reset_state(STATE_COMPLETED)
+                else:
+                    reset_state(STATE_READY_SCREEN)
+
+    elif state == STATE_COMPLETED:
+        if not file_saved:
+            filename = f'force_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            force_data.to_csv(filename, index=False)
+            print(f"Data saved to {filename}")
+            file_saved = True
+
+        instruction_area.fill(GREY)
+        draw_text_centered("Experiment End", font, BLACK, instruction_area)
+        draw_text_centered("Thank you for participation", font, BLACK, instruction_area, offset_y=50)
+        draw_text_centered("Press ESC to exit", font, BLACK, instruction_area, offset_y=100)
+        screen.blit(instruction_area, (0, 0))
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:  # Exit on ESC key
+                running = False
+
+
+    # Update the screen
+    pygame.display.flip()
+
+pygame.quit()
