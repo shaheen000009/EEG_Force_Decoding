@@ -1,0 +1,26 @@
+% Arduino Uno Calibration
+
+#include "HX711.h"
+
+// HX711 circuit wiring
+const int LOADCELL_DOUT_PIN = 3;
+const int LOADCELL_SCK_PIN = 2;
+
+HX711 scale;
+//double calibration_factor = -0.0095;
+
+void setup() {
+  Serial.begin(9600); // High baud rate for fast data transmission
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(); // Adjust to your calibration factor
+  scale.tare(); // Tare the scale to zero at startup
+}
+
+void loop() {
+  long raw_output = scale.read(); // Read raw data
+  int calibrated_output = -0.0092*raw_output - 1778.2404;
+  Serial.println(calibrated_output); // Output the calibrated weight
+}
+
+
+%
