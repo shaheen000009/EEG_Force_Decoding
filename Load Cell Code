@@ -1,5 +1,3 @@
-% Arduino Uno Calibration
-
 #include "HX711.h"
 
 // HX711 circuit wiring
@@ -21,6 +19,3 @@ void loop() {
   int calibrated_output = -0.0092*raw_output - 1778.2404;
   Serial.println(calibrated_output); // Output the calibrated weight
 }
-
-
-%
