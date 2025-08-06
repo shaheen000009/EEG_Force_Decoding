@@ -1,132 +1,82 @@
-// Dual EMG and Force Measurement System
-// EMG: BioAmp EXG Pill + Arduino analog input
-// Force: Load cell + ADS1115 (differential mode)
-// Sampling rate: 500 Hz
-// Custom calibration: force = 36.88 * raw_value - 1796.2
-// Updates: Gain 16, Data Rate 860 SPS, Averaging of 5 for force stability
-// Modified: Removed buffering for real-time data output (may affect exact 500 Hz due to Serial.print delays)
-// Output: EMG_filt,Force (real-time, each sample printed immediately)
+// ========================  Dual EMG + Force @500 Hz  ========================
+//  Hardware:
+//    • BioAmp EXG Pill  → Arduino A0 (EMG signal)
+//    • Load cell        → ADS1115 diff inputs A0(+) / A1(–)
+//    • ADS1115 address 0x48 on I²C bus
+//
+//  Force calibration:
+//      Force_N = 36.88 * raw_value – 1796.2
+//
+//  Serial output (CSV, one line per sample):
+//      EMG_filt , Force
+//
 
-#include <Adafruit_ADS1X15.h>
+
 #include <Wire.h>
+#include <Adafruit_ADS1X15.h>
 
-// Configuration
-#define SAMPLE_RATE 500
-#define BAUD_RATE 115200
-#define EMG_INPUT_PIN A0  // EXG Pill connected to analog pin
+// ---------------------------  User settings  ----------------------------
+#define SAMPLE_RATE   500          // Hz
+#define BAUD_RATE     230400       
+#define EMG_PIN       A0           // analog pin for BioAmp EXG Pill
 
-// ADS1115 setup
+// ---------------------------  Global objects  ---------------------------
 Adafruit_ADS1115 ads;
 
+// ------------------------------  Setup  ----------------------------------
 void setup() {
-  // Serial connection
   Serial.begin(BAUD_RATE);
-  
-  // Initialize ADS1115 with explicit address
-  if (!ads.begin(0x48)) {  // Specify address 0x48 (change if needed)
-    Serial.println("Failed to initialize ADS1115! Check wiring, power, or I2C address.");
-    // while (1);  // Uncomment if you want to halt on failure
+
+  if (!ads.begin(0x48)) {                      // ADS1115 address pin tied to GND
+    Serial.println("ADS1115 init failed");
   } else {
-    Serial.println("ADS1115 initialized successfully");
+    Serial.println("ADS1115 initialized");
   }
-  
-  // Configure ADS1115
-  ads.setGain(GAIN_SIXTEEN);  // +/- 0.256V range for higher sensitivity
-  ads.setDataRate(RATE_ADS1115_860SPS);  // Fastest data rate for better performance
-  
-  // Print header
-  Serial.println("EMG_filt,Force");
-  
-  delay(1000); // Stabilization delay
+
+  ads.setGain(GAIN_SIXTEEN);                   // ±0.256 V, 7.8125 µV/LSB
+  ads.setDataRate(RATE_ADS1115_860SPS);        // fastest ADS1115 setting
+
+  Serial.println("EMG_filt,Force");            // CSV header
 }
 
+// ------------------------------  Loop  -----------------------------------
 void loop() {
-  // Timing control for 500 Hz sampling
-  static unsigned long past = 0;
-  unsigned long present = micros();
-  unsigned long interval = present - past;
-  past = present;
-  
-  static long timer = 0;
-  timer -= interval;
-  
-  // Sample at 500 Hz
-  if (timer < 0) {
-    timer += 1000000 / SAMPLE_RATE;
-    
-    // Read EMG from EXG Pill
-    float emg_raw = analogRead(EMG_INPUT_PIN);
-    float emg_filtered = EMGFilter(emg_raw);
-    
-    // Read force from load cell via ADS1115 (differential) with averaging
-    long sum = 0;
-    bool ads_success = true;
-    for (int i = 0; i < 5; i++) {  // Averaging for stability
-      int16_t reading = ads.readADC_Differential_0_1();
-      if (reading == 0 && i == 0) {  // Basic failure check
-        ads_success = false;
-        break;
-      }
-      sum += reading;
-    }
-    float raw_value = ads_success ? (sum / 5.0f) : 0.0f;  // Use float for fractional averaging
-    
-    // Custom calibration formula
-    float force = ads_success ? (36.88f * raw_value - 1796.2f) : -999.0f;
-    
-    // Optional: Apply moving average filter to smooth force (uncomment if needed)
-    // force = forceFilter(force);
-    
-    // Print real-time: Each sample immediately
-    Serial.print(emg_filtered);
-    Serial.print(",");
-    Serial.println(force);
+  static unsigned long tPrev = micros();
+  unsigned long tNow = micros();
+  long delta = tNow - tPrev;
+  tPrev = tNow;
+
+  static long chrono = 0;
+  chrono -= delta;
+
+  if (chrono < 0) {                            // time to take a sample
+    chrono += 1'000'000L / SAMPLE_RATE;        // keep 500 Hz cadence
+
+    // --------  EMG acquisition & filtering  --------
+    float emg_raw   = analogRead(EMG_PIN);     // 0-1023 from Arduino ADC
+    float emg_filt  = EMGFilter(emg_raw);
+
+    // --------  Force acquisition  --------
+    int16_t adc_raw = ads.readADC_Differential_0_1();
+    float   force_N = 36.88f * adc_raw - 1796.2f;
+
+    // --------  Real-time CSV output  --------
+    Serial.print(emg_filt, 3);                 // 3 decimal places
+    Serial.print(',');
+    Serial.println(force_N, 2);                // 2 decimal places
   }
 }
 
-// Band-Pass Butterworth IIR digital filter for EMG (unchanged)
-float EMGFilter(float input) {
-  float output = input;
-  {
-    static float z1, z2;
-    float x = output - 0.05159732 * z1 - 0.36347401 * z2;
-    output = 0.01856301 * x + 0.03712602 * z1 + 0.01856301 * z2;
-    z2 = z1;
-    z1 = x;
-  }
-  {
-    static float z1, z2;
-    float x = output - -0.53945795 * z1 - 0.39764934 * z2;
-    output = 1.00000000 * x + -2.00000000 * z1 + 1.00000000 * z2;
-    z2 = z1;
-    z1 = x;
-  }
-  {
-    static float z1, z2;
-    float x = output - 0.47319594 * z1 - 0.70744137 * z2;
-    output = 1.00000000 * x + 2.00000000 * z1 + 1.00000000 * z2;
-    z2 = z1;
-    z1 = x;
-  }
-  {
-    static float z1, z2;
-    float x = output - -1.00211112 * z1 - 0.74520226 * z2;
-    output = 1.00000000 * x + -2.00000000 * z1 + 1.00000000 * z2;
-    z2 = z1;
-    z1 = x;
-  }
-  return output;
-}
-
-// Optional: Simple moving average filter for force smoothing (5-point)
-float forceFilter(float input) {
-  static float buf[5] = {0};
-  static int idx = 0;
-  buf[idx] = input;
-  idx = (idx + 1) % 5;
-  float sum = 0;
-  for (int i = 0; i < 5; i++) {
-    sum += buf[i];
-  }
-  return sum / 5.0f;
+// --------------------  4th-order Butterworth BP  -------------------------
+float EMGFilter(float x) {
+  float y = x;
+  { static float z1, z2; float t = y - 0.05159732*z1 - 0.36347401*z2;
+    y = 0.01856301*t + 0.03712602*z1 + 0.01856301*z2; z2 = z1; z1 = t; }
+  { static float z1, z2; float t = y + 0.53945795*z1 - 0.39764934*z2;
+    y = 1.0f*t - 2.0f*z1 + 1.0f*z2;             z2 = z1; z1 = t; }
+  { static float z1, z2; float t = y - 0.47319594*z1 - 0.70744137*z2;
+    y = 1.0f*t + 2.0f*z1 + 1.0f*z2;             z2 = z1; z1 = t; }
+  { static float z1, z2; float t = y + 1.00211112*z1 - 0.74520226*z2;
+    y = 1.0f*t - 2.0f*z1 + 1.0f*z2;             z2 = z1; z1 = t; }
+  return y;
 }
