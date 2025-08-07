@@ -6,10 +6,11 @@ If necessary, re-reference the EEG data to improve signal quality, which may inv
 # Step 4 Remove Line Noise 
 # Step 5 Low Pass Filter and High Pass Filter
 # Step 6 Remove bad data and bad Channels
-# Step 7 Apply ICA
-Use methods such as independent component analysis (ICA) to separate the signal into independent components and remove artifacts.
-# Step 8 Re- Reference ( Average)
+# Step 7 Re- Reference ( Average)
 Re-reference the EEG data to the average of all channels to improve signal quality.
+# Step 8 Apply ICA
+Use methods such as independent component analysis (ICA) to separate the signal into independent components and remove artifacts.
+
 # Step 9 Extract Epochs
 Extract specific time segments of interest from the EEG data.
 # Step 10 Time-Frequency Analysis
